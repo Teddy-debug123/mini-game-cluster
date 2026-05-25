@@ -30,9 +30,13 @@ public class GamePanel extends JPanel implements ActionListener {
     private static final int SPEED_INCREMENT_INTERVAL = 5;
     private static final int COMBO_TIMEOUT = 4000;
     
-    private static final int NEGATIVE_BUFF_SCORE = 3000;
+    private static final int NEGATIVE_BUFF_START_SCORE = 3000;
     private static final long NEGATIVE_BUFF_DURATION = 60000;
+    private static final long NEGATIVE_BUFF_INTERVAL = 120000;
     private static final int RED_WALL_SECTION_DURATION = 20000;
+    private static final int SPEED_BUFF_FOOD_MIN = 40;
+    private static final int SPEED_BUFF_FOOD_MAX = 50;
+    private static final long SPEED_BUFF_DURATION = 10000;
     private static final int RED_WALL_SPAWN_INTERVAL = 5000;
     private static final long RED_WALL_LIFETIME = 5000;
 
@@ -74,7 +78,12 @@ public class GamePanel extends JPanel implements ActionListener {
     private Point flashPillar = null;
     
     private boolean negativeBuffActive = false;
-    private boolean negativeBuffTriggered = false;
+    private int negativeBuffEventCount = 0;
+    private boolean negativeBuffUnlocked = false;
+    private long lastNegativeBuffEndTime = 0;
+    private boolean speedBuffActive = false;
+    private long speedBuffEndTime = 0;
+    private boolean speedBuffTriggered = false;
     private long negativeBuffEndTime;
     private long negativeBuffStartTime;
     private long lastRedWallSpawnTime;
@@ -172,7 +181,12 @@ public class GamePanel extends JPanel implements ActionListener {
         pillarFlash = false;
         flashPillar = null;
         negativeBuffActive = false;
-        negativeBuffTriggered = false;
+        negativeBuffEventCount = 0;
+        negativeBuffUnlocked = false;
+        lastNegativeBuffEndTime = 0;
+        speedBuffActive = false;
+        speedBuffEndTime = 0;
+        speedBuffTriggered = false;
         negativeBuffEndTime = 0;
         negativeBuffStartTime = 0;
         lastRedWallSpawnTime = 0;
@@ -195,6 +209,68 @@ public class GamePanel extends JPanel implements ActionListener {
         
         updateSpeed();
         requestFocus();
+    }
+    
+    private void respawnAtOpenArea() {
+        snake.clear();
+        
+        Point spawnPoint = findOpenArea();
+        if (spawnPoint == null) {
+            spawnPoint = new Point(UNIT_SIZE * 2, UNIT_SIZE * 2);
+        }
+        
+        for (int i = 0; i < 3; i++) {
+            snake.add(new Point(spawnPoint.x - i * UNIT_SIZE, spawnPoint.y));
+        }
+        direction = 'R';
+        isInvincible = true;
+        invincibleEndTime = System.currentTimeMillis() + 10000;
+        hasRespawnMarker = false;
+        updateSpeed();
+    }
+    
+    private Point findOpenArea() {
+        int maxAttempts = 100;
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            int x = random.nextInt(WIDTH / UNIT_SIZE) * UNIT_SIZE;
+            int y = random.nextInt(HEIGHT / UNIT_SIZE) * UNIT_SIZE;
+            Point candidate = new Point(x, y);
+            
+            boolean isOpen = true;
+            
+            for (int i = -1; i <= 1; i++) {
+                for (int j = -1; j <= 1; j++) {
+                    Point checkPoint = new Point(x + i * UNIT_SIZE, y + j * UNIT_SIZE);
+                    
+                    if (checkPoint.x < 0 || checkPoint.x >= WIDTH || checkPoint.y < 0 || checkPoint.y >= HEIGHT) {
+                        isOpen = false;
+                        break;
+                    }
+                    
+                    for (Point p : pillars) {
+                        if (checkPoint.equals(p)) {
+                            isOpen = false;
+                            break;
+                        }
+                    }
+                    if (!isOpen) break;
+                    
+                    for (RedWall wall : redWalls) {
+                        if (checkPoint.equals(wall.position)) {
+                            isOpen = false;
+                            break;
+                        }
+                    }
+                    if (!isOpen) break;
+                }
+                if (!isOpen) break;
+            }
+            
+            if (isOpen) {
+                return candidate;
+            }
+        }
+        return null;
     }
     
     private void clearPillars() {
@@ -399,6 +475,21 @@ public class GamePanel extends JPanel implements ActionListener {
             g.setColor(Color.GREEN);
             g.setFont(new Font("微软雅黑", Font.BOLD, 22));
             g.drawString("🔄 重生", 15, 150);
+        }
+        
+        if (speedBuffActive) {
+            long remainingTime = (speedBuffEndTime - System.currentTimeMillis()) / 1000;
+            g.setColor(new Color(255, 165, 0));
+            g.setFont(new Font("微软雅黑", Font.BOLD, 20));
+            g.drawString("⚡ 加速 x3! " + remainingTime + "s", WIDTH - 180, 105);
+        }
+        
+        if (negativeBuffActive) {
+            long remainingTime = (negativeBuffEndTime - System.currentTimeMillis()) / 1000;
+            int difficultyLevel = Math.min(negativeBuffEventCount + 1, 3);
+            g.setColor(Color.RED);
+            g.setFont(new Font("微软雅黑", Font.BOLD, 20));
+            g.drawString("⚠️ 危险 Lv" + difficultyLevel + "! " + remainingTime + "s", WIDTH - 220, 130);
         }
         
         g.setColor(Color.WHITE);
@@ -813,17 +904,47 @@ public class GamePanel extends JPanel implements ActionListener {
     }
     
     private void checkNegativeBuff(int currentScore) {
-        if (!negativeBuffTriggered && currentScore >= NEGATIVE_BUFF_SCORE) {
-            negativeBuffTriggered = true;
-            negativeBuffActive = true;
-            negativeBuffEndTime = System.currentTimeMillis() + NEGATIVE_BUFF_DURATION;
-            negativeBuffStartTime = System.currentTimeMillis();
-            lastRedWallSpawnTime = System.currentTimeMillis();
+        if (!negativeBuffUnlocked && currentScore >= NEGATIVE_BUFF_START_SCORE) {
+            negativeBuffUnlocked = true;
+            startNegativeBuffEvent();
+            return;
+        }
+        
+        if (negativeBuffUnlocked && !negativeBuffActive) {
+            if (lastNegativeBuffEndTime == 0 || 
+                System.currentTimeMillis() - lastNegativeBuffEndTime >= NEGATIVE_BUFF_INTERVAL) {
+                startNegativeBuffEvent();
+            }
         }
         
         if (negativeBuffActive && System.currentTimeMillis() >= negativeBuffEndTime) {
             negativeBuffActive = false;
+            negativeBuffEventCount++;
+            lastNegativeBuffEndTime = System.currentTimeMillis();
             redWalls.clear();
+        }
+    }
+    
+    private void startNegativeBuffEvent() {
+        negativeBuffActive = true;
+        negativeBuffEndTime = System.currentTimeMillis() + NEGATIVE_BUFF_DURATION;
+        negativeBuffStartTime = System.currentTimeMillis();
+        lastRedWallSpawnTime = System.currentTimeMillis();
+    }
+    
+    private void checkSpeedBuff() {
+        if (!speedBuffTriggered && foodCount >= SPEED_BUFF_FOOD_MIN && foodCount <= SPEED_BUFF_FOOD_MAX) {
+            if (random.nextDouble() < 0.1) {
+                speedBuffActive = true;
+                speedBuffEndTime = System.currentTimeMillis() + SPEED_BUFF_DURATION;
+                speedBuffTriggered = true;
+                updateSpeed();
+            }
+        }
+        
+        if (speedBuffActive && System.currentTimeMillis() >= speedBuffEndTime) {
+            speedBuffActive = false;
+            updateSpeed();
         }
     }
     
@@ -855,28 +976,62 @@ public class GamePanel extends JPanel implements ActionListener {
         if (!negativeBuffActive) return;
         
         long elapsed = currentTime - negativeBuffStartTime;
+        long spawnInterval = RED_WALL_SPAWN_INTERVAL;
         
-        if (currentTime - lastRedWallSpawnTime < RED_WALL_SPAWN_INTERVAL) return;
+        int difficultyLevel = Math.min(negativeBuffEventCount + 1, 3);
         
-        if (elapsed < RED_WALL_SECTION_DURATION) {
-            redWalls.clear();
-            spawn6CellWall(currentTime);
-            lastRedWallSpawnTime = currentTime;
-        } else if (elapsed < RED_WALL_SECTION_DURATION * 2) {
-            redWalls.clear();
-            spawnTwoWalls(currentTime);
-            lastRedWallSpawnTime = currentTime;
-        } else {
-            redWalls.clear();
-            spawnThreeBlockWalls(currentTime);
-            lastRedWallSpawnTime = currentTime;
+        if (difficultyLevel >= 2) {
+            spawnInterval = RED_WALL_SPAWN_INTERVAL * 4 / 5;
         }
+        if (difficultyLevel >= 3) {
+            spawnInterval = RED_WALL_SPAWN_INTERVAL * 3 / 5;
+        }
+        
+        if (currentTime - lastRedWallSpawnTime < spawnInterval) return;
+        
+        redWalls.clear();
+        
+        if (difficultyLevel == 1) {
+            if (elapsed < RED_WALL_SECTION_DURATION) {
+                spawn6CellWall(currentTime);
+            } else if (elapsed < RED_WALL_SECTION_DURATION * 2) {
+                spawnTwoWalls(currentTime);
+            } else {
+                spawnThreeBlockWalls(currentTime);
+            }
+        } else if (difficultyLevel == 2) {
+            if (elapsed < RED_WALL_SECTION_DURATION) {
+                spawnTwoWalls(currentTime);
+            } else if (elapsed < RED_WALL_SECTION_DURATION * 2) {
+                spawnThreeBlockWalls(currentTime);
+                spawn6CellWall(currentTime);
+            } else {
+                spawnThreeBlockWalls(currentTime);
+                spawnTwoWalls(currentTime);
+            }
+        } else if (difficultyLevel >= 3) {
+            if (elapsed < RED_WALL_SECTION_DURATION) {
+                spawnThreeBlockWalls(currentTime);
+            } else if (elapsed < RED_WALL_SECTION_DURATION * 2) {
+                spawnThreeBlockWalls(currentTime);
+                spawnThreeBlockWalls(currentTime);
+            } else {
+                spawnThreeBlockWalls(currentTime);
+                spawnThreeBlockWalls(currentTime);
+                spawn6CellWall(currentTime);
+            }
+        }
+        
+        lastRedWallSpawnTime = currentTime;
     }
     
     private void updateSpeed() {
         int targetDelay;
         
-        if (isFast) {
+        if (speedBuffActive) {
+            targetDelay = baseDelay / 3;
+            if (targetDelay < FAST_DELAY) targetDelay = FAST_DELAY;
+        } else if (isFast) {
             targetDelay = FAST_DELAY;
         } else if (isSlow) {
             targetDelay = SLOW_DELAY;
@@ -1035,7 +1190,11 @@ public class GamePanel extends JPanel implements ActionListener {
                     int pillarBonus = comboCount * 100;
                     score += pillarBonus;
                 } else {
-                    running = false;
+                    if (hasRespawnMarker) {
+                        respawnAtOpenArea();
+                    } else {
+                        running = false;
+                    }
                 }
                 break;
             }
@@ -1050,7 +1209,11 @@ public class GamePanel extends JPanel implements ActionListener {
                     invincibleEndTime = 0;
                     updateSpeed();
                 } else {
-                    running = false;
+                    if (hasRespawnMarker) {
+                        respawnAtOpenArea();
+                    } else {
+                        running = false;
+                    }
                 }
                 break;
             }
@@ -1142,6 +1305,7 @@ public class GamePanel extends JPanel implements ActionListener {
             if (currentScore < 0) currentScore = 0;
             
             checkNegativeBuff(currentScore);
+            checkSpeedBuff();
             
             if (negativeBuffActive) {
                 updateRedWalls();
