@@ -16,8 +16,8 @@ public class GamePanel extends JPanel implements ActionListener {
     private static final int DELAY = 220;
     private static final int FAST_DELAY = 110;
     private static final int SLOW_DELAY = 440;
-    private static final long INVINCIBLE_TIME = 5000;
-    private static final int GOLDEN_FOOD_INTERVAL = 30000;
+    private static final long INVINCIBLE_TIME = 8000;
+    private static final int GOLDEN_FOOD_INTERVAL = 25000;
     private static final int PILLAR_DESTROY_SCORE = 300;
 
     private ArrayList<Point> snake;
@@ -78,6 +78,7 @@ public class GamePanel extends JPanel implements ActionListener {
         invincibleEndTime = 0;
         timer = new Timer(DELAY, this);
         timer.start();
+        requestFocus();
     }
 
     private void pauseGame() {
@@ -383,21 +384,27 @@ public class GamePanel extends JPanel implements ActionListener {
                     direction = 'D';
                 }
             } else if (key == KeyEvent.VK_SHIFT) {
-                isSlow = !isSlow;
-                if (isSlow) {
-                    isFast = false;
-                    timer.setDelay(SLOW_DELAY);
-                } else {
-                    timer.setDelay(isFast ? FAST_DELAY : DELAY);
-                }
+                isSlow = true;
+                isFast = false;
+                timer.setDelay(SLOW_DELAY);
             } else if (key == KeyEvent.VK_SPACE) {
-                isFast = !isFast;
-                if (isFast) {
-                    isSlow = false;
-                    timer.setDelay(FAST_DELAY);
-                } else {
-                    timer.setDelay(isSlow ? SLOW_DELAY : DELAY);
-                }
+                isFast = true;
+                isSlow = false;
+                timer.setDelay(FAST_DELAY);
+            }
+        }
+
+        public void keyReleased(KeyEvent e) {
+            int key = e.getKeyCode();
+
+            if (!running || paused) return;
+
+            if (key == KeyEvent.VK_SHIFT) {
+                isSlow = false;
+                timer.setDelay(isFast ? FAST_DELAY : DELAY);
+            } else if (key == KeyEvent.VK_SPACE) {
+                isFast = false;
+                timer.setDelay(isSlow ? SLOW_DELAY : DELAY);
             }
         }
     }
