@@ -6,6 +6,7 @@ import java.awt.event.*;
 import java.util.ArrayList;
 import java.util.Random;
 import java.io.*;
+import javax.imageio.ImageIO;
 
 public class GamePanel extends JPanel implements ActionListener {
     private GameFrame frame;
@@ -16,20 +17,32 @@ public class GamePanel extends JPanel implements ActionListener {
     private static final int BASE_DELAY = 220;
     private static final int FAST_DELAY = 110;
     private static final int SLOW_DELAY = 440;
+    private static final int INVINCIBLE_DELAY = 110;
     private static final long INVINCIBLE_TIME = 8000;
     private static final int BASE_GOLDEN_FOOD_INTERVAL = 25000;
     private static final int MIN_GOLDEN_FOOD_INTERVAL = 10000;
+    private static final int PURPLE_FOOD_INTERVAL = 120000;
+    private static final int CYAN_FOOD_INTERVAL = 180000;
     private static final int PILLAR_DESTROY_SCORE = 300;
     private static final int MAX_PILLARS = 15;
     private static final int SAFE_TIME = 5000;
     private static final int SPEED_INCREMENT = 5;
     private static final int SPEED_INCREMENT_INTERVAL = 5;
-    private static final int COMBO_TIMEOUT = 2000;
+    private static final int COMBO_TIMEOUT = 4000;
+    
+    private static final int NEGATIVE_BUFF_SCORE = 3000;
+    private static final long NEGATIVE_BUFF_DURATION = 60000;
+    private static final int RED_WALL_SECTION_DURATION = 20000;
+    private static final int RED_WALL_SPAWN_INTERVAL = 5000;
+    private static final long RED_WALL_LIFETIME = 5000;
 
     private ArrayList<Point> snake;
     private Point food;
-    private Point goldenFood;
+    private ArrayList<Point> goldenFoods;
+    private Point purpleFood;
+    private Point cyanFood;
     private ArrayList<Point> pillars;
+    private ArrayList<RedWall> redWalls;
     private char direction = 'R';
     private boolean running = false;
     private boolean paused = false;
@@ -43,22 +56,44 @@ public class GamePanel extends JPanel implements ActionListener {
     private boolean isSlow = false;
     private boolean isInvincible = false;
     private long invincibleEndTime;
-    private boolean goldenFoodActive = false;
+    private boolean purpleFoodActive = false;
+    private boolean cyanFoodActive = false;
     private long lastGoldenFoodTime;
+    private long lastPurpleFoodTime;
+    private long lastCyanFoodTime;
     private int currentDelay;
+    private int baseDelay;
     private int comboCount;
     private long lastComboTime;
+    private boolean isFoodCombo;
+    private String[] inventory = new String[3];
+    private int selectedItem = -1;
+    private boolean hasRespawnMarker = false;
     private int highScore;
-    private boolean flashEffect = false;
     private boolean pillarFlash = false;
     private Point flashPillar = null;
+    
+    private boolean negativeBuffActive = false;
+    private boolean negativeBuffTriggered = false;
+    private long negativeBuffEndTime;
+    private long negativeBuffStartTime;
+    private long lastRedWallSpawnTime;
+    private long lastPausedTime;
+    private long accumulatedPauseTime;
+    
+    private Image headSkin;
+    private Image bodySkin;
+    private boolean useSkin = false;
+    private String currentSkin = "default";
 
     public GamePanel(GameFrame frame) {
         this.frame = frame;
         random = new Random();
         snake = new ArrayList<>();
         pillars = new ArrayList<>();
+        redWalls = new ArrayList<>();
         loadHighScore();
+        loadDefaultSkin();
         initPanel();
     }
 
@@ -69,17 +104,52 @@ public class GamePanel extends JPanel implements ActionListener {
         setDoubleBuffered(true);
         addKeyListener(new MyKeyAdapter());
     }
+    
+    private void loadDefaultSkin() {
+        headSkin = null;
+        bodySkin = null;
+        useSkin = false;
+    }
+    
+    public void loadSkin(String skinName) {
+        currentSkin = skinName;
+        if ("default".equals(skinName)) {
+            loadDefaultSkin();
+            return;
+        }
+        
+        try {
+            File headFile = new File("skins/" + skinName + "_head.png");
+            File bodyFile = new File("skins/" + skinName + "_body.png");
+            
+            if (headFile.exists() && bodyFile.exists()) {
+                headSkin = ImageIO.read(headFile).getScaledInstance(UNIT_SIZE, UNIT_SIZE, Image.SCALE_SMOOTH);
+                bodySkin = ImageIO.read(bodyFile).getScaledInstance(UNIT_SIZE, UNIT_SIZE, Image.SCALE_SMOOTH);
+                useSkin = true;
+            } else {
+                loadDefaultSkin();
+            }
+        } catch (Exception e) {
+            loadDefaultSkin();
+        }
+    }
 
     public void startGame() {
         snake.clear();
         pillars.clear();
+        redWalls.clear();
+        goldenFoods = new ArrayList<>();
         for (int i = 0; i < 3; i++) {
             snake.add(new Point(UNIT_SIZE * 2 - i * UNIT_SIZE, UNIT_SIZE * 2));
         }
         newFood();
-        goldenFood = null;
-        goldenFoodActive = false;
+        purpleFood = null;
+        cyanFood = null;
+        purpleFoodActive = false;
+        cyanFoodActive = false;
         lastGoldenFoodTime = System.currentTimeMillis();
+        lastPurpleFoodTime = System.currentTimeMillis();
+        lastCyanFoodTime = System.currentTimeMillis();
         direction = 'R';
         running = true;
         paused = false;
@@ -91,22 +161,54 @@ public class GamePanel extends JPanel implements ActionListener {
         isSlow = false;
         isInvincible = false;
         invincibleEndTime = 0;
+        baseDelay = BASE_DELAY;
         currentDelay = BASE_DELAY;
         comboCount = 0;
         lastComboTime = 0;
-        flashEffect = false;
+        isFoodCombo = false;
+        inventory = new String[3];
+        selectedItem = -1;
+        hasRespawnMarker = false;
         pillarFlash = false;
         flashPillar = null;
+        negativeBuffActive = false;
+        negativeBuffTriggered = false;
+        negativeBuffEndTime = 0;
+        negativeBuffStartTime = 0;
+        lastRedWallSpawnTime = 0;
+        accumulatedPauseTime = 0;
         timer = new Timer(currentDelay, this);
         timer.start();
         requestFocus();
+    }
+    
+    private void respawnSnake() {
+        if (!running || paused) return;
+        
+        snake.clear();
+        for (int i = 0; i < 3; i++) {
+            snake.add(new Point(UNIT_SIZE * 2 - i * UNIT_SIZE, UNIT_SIZE * 2));
+        }
+        direction = 'R';
+        isInvincible = true;
+        invincibleEndTime = System.currentTimeMillis() + 3000;
+        
+        updateSpeed();
+        requestFocus();
+    }
+    
+    private void clearPillars() {
+        if (!running || paused) return;
+        pillars.clear();
     }
 
     private void pauseGame() {
         paused = !paused;
         if (paused) {
+            lastPausedTime = System.currentTimeMillis();
             timer.stop();
         } else {
+            accumulatedPauseTime += System.currentTimeMillis() - lastPausedTime;
             timer.start();
         }
     }
@@ -135,7 +237,7 @@ public class GamePanel extends JPanel implements ActionListener {
             g.setColor(Color.RED);
             g.fillOval(food.x, food.y, UNIT_SIZE, UNIT_SIZE);
 
-            if (goldenFoodActive && goldenFood != null) {
+            for (Point goldenFood : goldenFoods) {
                 g.setColor(Color.YELLOW);
                 g.fillOval(goldenFood.x, goldenFood.y, UNIT_SIZE, UNIT_SIZE);
                 g.setColor(Color.ORANGE);
@@ -143,6 +245,20 @@ public class GamePanel extends JPanel implements ActionListener {
                 if (System.currentTimeMillis() % 500 < 250) {
                     g.drawOval(goldenFood.x - 2, goldenFood.y - 2, UNIT_SIZE + 4, UNIT_SIZE + 4);
                 }
+            }
+            
+            if (purpleFoodActive && purpleFood != null) {
+                g.setColor(new Color(160, 32, 240));
+                g.fillOval(purpleFood.x, purpleFood.y, UNIT_SIZE, UNIT_SIZE);
+                g.setColor(new Color(128, 0, 128));
+                g.drawOval(purpleFood.x, purpleFood.y, UNIT_SIZE, UNIT_SIZE);
+            }
+            
+            if (cyanFoodActive && cyanFood != null) {
+                g.setColor(new Color(0, 255, 255));
+                g.fillOval(cyanFood.x, cyanFood.y, UNIT_SIZE, UNIT_SIZE);
+                g.setColor(new Color(0, 128, 128));
+                g.drawOval(cyanFood.x, cyanFood.y, UNIT_SIZE, UNIT_SIZE);
             }
 
             for (Point p : pillars) {
@@ -153,33 +269,64 @@ public class GamePanel extends JPanel implements ActionListener {
                 }
                 g.fillRect(p.x, p.y, UNIT_SIZE, UNIT_SIZE);
             }
+            
+            for (RedWall wall : redWalls) {
+                float alpha = (float)(RED_WALL_LIFETIME - (System.currentTimeMillis() - wall.spawnTime)) / RED_WALL_LIFETIME;
+                if (alpha < 0.3f) alpha = 0.3f;
+                g.setColor(new Color(255, 0, 0, (int)(alpha * 255)));
+                g.fillRect(wall.position.x, wall.position.y, UNIT_SIZE, UNIT_SIZE);
+                g.setColor(Color.RED);
+                g.drawRect(wall.position.x, wall.position.y, UNIT_SIZE, UNIT_SIZE);
+            }
+            
             if (pillarFlash) {
                 pillarFlash = false;
                 flashPillar = null;
             }
 
             boolean shouldFlash = isInvincible && (System.currentTimeMillis() % 200 < 100);
+            
             for (int i = 0; i < snake.size(); i++) {
                 Point p = snake.get(i);
-                if (i == 0) {
-                    if (isInvincible && shouldFlash) {
-                        g.setColor(Color.WHITE);
+                
+                if (useSkin && headSkin != null && bodySkin != null) {
+                    if (i == 0) {
+                        if (isInvincible && shouldFlash) {
+                            g.setColor(Color.WHITE);
+                            g.fillRect(p.x, p.y, UNIT_SIZE, UNIT_SIZE);
+                        }
+                        g.drawImage(headSkin, p.x, p.y, this);
                     } else {
-                        g.setColor(isInvincible ? Color.CYAN : Color.GREEN);
+                        if (isInvincible && shouldFlash) {
+                            g.setColor(Color.WHITE);
+                            g.fillRect(p.x, p.y, UNIT_SIZE, UNIT_SIZE);
+                        }
+                        g.drawImage(bodySkin, p.x, p.y, this);
                     }
                 } else {
-                    if (isInvincible && shouldFlash) {
-                        g.setColor(new Color(200, 200, 255));
+                    if (i == 0) {
+                        if (isInvincible && shouldFlash) {
+                            g.setColor(Color.WHITE);
+                        } else {
+                            g.setColor(isInvincible ? Color.CYAN : new Color(0, 150, 0));
+                        }
                     } else {
-                        g.setColor(isInvincible ? new Color(100, 200, 255) : new Color(45, 180, 0));
+                        if (isInvincible && shouldFlash) {
+                            g.setColor(new Color(200, 200, 255));
+                        } else {
+                            g.setColor(isInvincible ? new Color(100, 200, 255) : new Color(0, 120, 0));
+                        }
                     }
+                    g.fillRect(p.x, p.y, UNIT_SIZE, UNIT_SIZE);
                 }
-                g.fillRect(p.x, p.y, UNIT_SIZE, UNIT_SIZE);
             }
 
             if (isFast) {
                 g.setColor(Color.YELLOW);
                 g.fillRect(0, HEIGHT - 5, WIDTH, 5);
+            } else if (isInvincible) {
+                g.setColor(Color.CYAN);
+                g.fillRect(0, HEIGHT - 3, WIDTH, 3);
             }
 
             drawScore(g);
@@ -189,14 +336,12 @@ public class GamePanel extends JPanel implements ActionListener {
     }
 
     private void drawScore(Graphics g) {
-        long elapsedTime = (System.currentTimeMillis() - startTime) / 1000;
-        int baseScore = foodCount * 100 + pillarDestroyCount * PILLAR_DESTROY_SCORE;
+        long elapsedTime = (System.currentTimeMillis() - startTime - accumulatedPauseTime) / 1000;
         int timePenalty = 0;
         if (elapsedTime * 1000 > SAFE_TIME) {
             timePenalty = (int)(elapsedTime - SAFE_TIME / 1000) * 5;
         }
-        int comboBonus = comboCount * 10;
-        int currentScore = baseScore - timePenalty + comboBonus;
+        int currentScore = score - timePenalty;
         if (currentScore < 0) currentScore = 0;
 
         g.setColor(Color.WHITE);
@@ -219,10 +364,100 @@ public class GamePanel extends JPanel implements ActionListener {
             g.drawString("无敌: " + remainingTime + "s", 15, 80);
         }
 
-        if (goldenFoodActive) {
+        if (!goldenFoods.isEmpty()) {
             g.setColor(Color.YELLOW);
             g.setFont(new Font("微软雅黑", Font.BOLD, 18));
-            g.drawString("⭐⭐ 金色豆子出现!", WIDTH - 180, 55);
+            g.drawString("⭐⭐ 金色豆子 x" + goldenFoods.size() + "!", WIDTH - 180, 55);
+        }
+        
+        if (comboCount > 0) {
+            long elapsedSinceCombo = System.currentTimeMillis() - lastComboTime;
+            float progress = 1.0f - (float)elapsedSinceCombo / COMBO_TIMEOUT;
+            if (progress < 0) progress = 0;
+            
+            int barWidth = 150;
+            int barHeight = 8;
+            int barX = 15;
+            int barY = 100;
+            
+            g.setColor(new Color(100, 100, 100));
+            g.fillRect(barX, barY, barWidth, barHeight);
+            
+            Color comboColor = isFoodCombo ? Color.RED : Color.BLUE;
+            g.setColor(comboColor);
+            g.fillRect(barX, barY, (int)(barWidth * progress), barHeight);
+            
+            g.setColor(Color.WHITE);
+            g.drawRect(barX, barY, barWidth, barHeight);
+            
+            g.setFont(new Font("微软雅黑", Font.BOLD, 18));
+            String comboType = isFoodCombo ? "吃豆" : "碰撞";
+            g.drawString(comboType + "连击 x" + comboCount, 15, 125);
+        }
+        
+        if (hasRespawnMarker) {
+            g.setColor(Color.GREEN);
+            g.setFont(new Font("微软雅黑", Font.BOLD, 22));
+            g.drawString("🔄 重生", 15, 150);
+        }
+        
+        g.setColor(Color.WHITE);
+        g.setFont(new Font("微软雅黑", Font.BOLD, 14));
+        g.drawString("道具栏:", 15, HEIGHT - 30);
+        
+        for (int i = 0; i < inventory.length; i++) {
+            int x = 75 + i * 50;
+            int y = HEIGHT - 35;
+            
+            if (selectedItem == i) {
+                g.setColor(Color.YELLOW);
+                g.drawRect(x - 2, y - 2, 34, 24);
+            }
+            
+            if (inventory[i] != null) {
+                g.setColor(new Color(100, 100, 100));
+                g.fillRect(x, y, 30, 20);
+                
+                g.setColor(Color.WHITE);
+                g.drawRect(x, y, 30, 20);
+                
+                int beanX = x + 5;
+                int beanY = y + 2;
+                int beanSize = 18;
+                
+                if ("clear".equals(inventory[i])) {
+                    g.setColor(new Color(160, 32, 240));
+                } else {
+                    g.setColor(Color.CYAN);
+                }
+                g.fillOval(beanX, beanY, beanSize, beanSize);
+                
+                g.setColor(Color.WHITE);
+                g.drawOval(beanX, beanY, beanSize, beanSize);
+            }
+        }
+        
+        g.setColor(Color.GRAY);
+        g.setFont(new Font("微软雅黑", Font.PLAIN, 12));
+        g.drawString("1/2/3 选择 | E 使用", 15, HEIGHT - 10);
+        
+        if (purpleFoodActive) {
+            g.setColor(new Color(160, 32, 240));
+            g.setFont(new Font("微软雅黑", Font.BOLD, 18));
+            g.drawString("💜 紫色豆子!", WIDTH - 180, 80);
+        }
+        
+        if (cyanFoodActive) {
+            g.setColor(new Color(0, 255, 255));
+            g.setFont(new Font("微软雅黑", Font.BOLD, 18));
+            g.drawString("💎 青色豆子!", WIDTH - 180, 80);
+        }
+        
+        if (negativeBuffActive) {
+            long remainingTime = (negativeBuffEndTime - System.currentTimeMillis()) / 1000;
+            g.setColor(Color.RED);
+            g.setFont(new Font("微软雅黑", Font.BOLD, 18));
+            g.drawString("⚠️ 危险! " + remainingTime + "s", WIDTH - 180, 105);
         }
 
         g.drawString("摧毁: " + pillarDestroyCount, WIDTH - 140, 55);
@@ -233,6 +468,11 @@ public class GamePanel extends JPanel implements ActionListener {
         }
         
         g.drawString("最高分: " + highScore, WIDTH - 140, 80);
+        
+        if (!"default".equals(currentSkin)) {
+            g.setColor(Color.MAGENTA);
+            g.drawString("皮肤: " + currentSkin, 15, 130);
+        }
     }
 
     private void drawPauseScreen(Graphics g) {
@@ -268,35 +508,387 @@ public class GamePanel extends JPanel implements ActionListener {
                 return;
             }
         }
-        if (goldenFood != null && food.equals(goldenFood)) {
+        for (RedWall wall : redWalls) {
+            if (food.equals(wall.position)) {
+                newFood();
+                return;
+            }
+        }
+        for (Point goldenFood : goldenFoods) {
+            if (food.equals(goldenFood)) {
+                newFood();
+                return;
+            }
+        }
+        if (purpleFood != null && food.equals(purpleFood)) {
             newFood();
+            return;
+        }
+        if (cyanFood != null && food.equals(cyanFood)) {
+            newFood();
+            return;
         }
     }
 
     private void spawnGoldenFood() {
-        if (!goldenFoodActive && running) {
+        if (!running) return;
+        
+        int x = random.nextInt(WIDTH / UNIT_SIZE) * UNIT_SIZE;
+        int y = random.nextInt(HEIGHT / UNIT_SIZE) * UNIT_SIZE;
+        Point goldenFood = new Point(x, y);
+
+        for (Point p : snake) {
+            if (goldenFood.equals(p)) {
+                spawnGoldenFood();
+                return;
+            }
+        }
+        for (Point p : pillars) {
+            if (goldenFood.equals(p)) {
+                spawnGoldenFood();
+                return;
+            }
+        }
+        for (RedWall wall : redWalls) {
+            if (goldenFood.equals(wall.position)) {
+                spawnGoldenFood();
+                return;
+            }
+        }
+        for (Point existingGolden : goldenFoods) {
+            if (goldenFood.equals(existingGolden)) {
+                spawnGoldenFood();
+                return;
+            }
+        }
+        if (goldenFood.equals(food)) {
+            spawnGoldenFood();
+            return;
+        }
+        if (purpleFood != null && goldenFood.equals(purpleFood)) {
+            spawnGoldenFood();
+            return;
+        }
+        if (cyanFood != null && goldenFood.equals(cyanFood)) {
+            spawnGoldenFood();
+            return;
+        }
+
+        goldenFoods.add(goldenFood);
+    }
+    
+    private void spawnPurpleFood() {
+        if (!purpleFoodActive && running) {
             int x = random.nextInt(WIDTH / UNIT_SIZE) * UNIT_SIZE;
             int y = random.nextInt(HEIGHT / UNIT_SIZE) * UNIT_SIZE;
-            goldenFood = new Point(x, y);
+            purpleFood = new Point(x, y);
 
             for (Point p : snake) {
-                if (goldenFood.equals(p)) {
-                    spawnGoldenFood();
+                if (purpleFood.equals(p)) {
+                    spawnPurpleFood();
                     return;
                 }
             }
             for (Point p : pillars) {
-                if (goldenFood.equals(p)) {
-                    spawnGoldenFood();
+                if (purpleFood.equals(p)) {
+                    spawnPurpleFood();
                     return;
                 }
             }
-            if (goldenFood.equals(food)) {
-                spawnGoldenFood();
+            for (RedWall wall : redWalls) {
+                if (purpleFood.equals(wall.position)) {
+                    spawnPurpleFood();
+                    return;
+                }
+            }
+            if (purpleFood.equals(food)) {
+                spawnPurpleFood();
+                return;
+            }
+            for (Point goldenFood : goldenFoods) {
+                if (purpleFood.equals(goldenFood)) {
+                    spawnPurpleFood();
+                    return;
+                }
+            }
+            if (cyanFood != null && purpleFood.equals(cyanFood)) {
+                spawnPurpleFood();
                 return;
             }
 
-            goldenFoodActive = true;
+            purpleFoodActive = true;
+        }
+    }
+    
+    private void spawnCyanFood() {
+        if (!cyanFoodActive && running) {
+            int x = random.nextInt(WIDTH / UNIT_SIZE) * UNIT_SIZE;
+            int y = random.nextInt(HEIGHT / UNIT_SIZE) * UNIT_SIZE;
+            cyanFood = new Point(x, y);
+
+            for (Point p : snake) {
+                if (cyanFood.equals(p)) {
+                    spawnCyanFood();
+                    return;
+                }
+            }
+            for (Point p : pillars) {
+                if (cyanFood.equals(p)) {
+                    spawnCyanFood();
+                    return;
+                }
+            }
+            for (RedWall wall : redWalls) {
+                if (cyanFood.equals(wall.position)) {
+                    spawnCyanFood();
+                    return;
+                }
+            }
+            if (cyanFood.equals(food)) {
+                spawnCyanFood();
+                return;
+            }
+            for (Point goldenFood : goldenFoods) {
+                if (cyanFood.equals(goldenFood)) {
+                    spawnCyanFood();
+                    return;
+                }
+            }
+            if (purpleFood != null && cyanFood.equals(purpleFood)) {
+                spawnCyanFood();
+                return;
+            }
+
+            cyanFoodActive = true;
+        }
+    }
+    
+    private boolean isValidWallPosition(Point pos) {
+        for (Point p : snake) {
+            if (pos.equals(p)) return false;
+        }
+        for (Point p : pillars) {
+            if (pos.equals(p)) return false;
+        }
+        for (RedWall wall : redWalls) {
+            if (pos.equals(wall.position)) return false;
+        }
+        if (pos.equals(food)) return false;
+        for (Point goldenFood : goldenFoods) {
+            if (pos.equals(goldenFood)) return false;
+        }
+        if (purpleFood != null && pos.equals(purpleFood)) return false;
+        if (cyanFood != null && pos.equals(cyanFood)) return false;
+        return true;
+    }
+    
+    private void spawnSingleWall(long spawnTime) {
+        int x = random.nextInt(WIDTH / UNIT_SIZE) * UNIT_SIZE;
+        int y = random.nextInt(HEIGHT / UNIT_SIZE) * UNIT_SIZE;
+        Point pos = new Point(x, y);
+        
+        if (isValidWallPosition(pos)) {
+            redWalls.add(new RedWall(pos, spawnTime));
+        }
+    }
+    
+    private void spawnHorizontalWall(int startX, int y, long spawnTime) {
+        for (int i = 0; i < 6; i++) {
+            Point pos = new Point(startX + i * UNIT_SIZE, y);
+            if (!isValidWallPosition(pos)) return;
+        }
+        for (int i = 0; i < 6; i++) {
+            Point pos = new Point(startX + i * UNIT_SIZE, y);
+            redWalls.add(new RedWall(pos, spawnTime));
+        }
+    }
+    
+    private void spawnVerticalWall(int x, int startY, long spawnTime) {
+        for (int i = 0; i < 6; i++) {
+            Point pos = new Point(x, startY + i * UNIT_SIZE);
+            if (!isValidWallPosition(pos)) return;
+        }
+        for (int i = 0; i < 6; i++) {
+            Point pos = new Point(x, startY + i * UNIT_SIZE);
+            redWalls.add(new RedWall(pos, spawnTime));
+        }
+    }
+    
+    private void spawn6CellWall(long spawnTime) {
+        boolean horizontal = random.nextBoolean();
+        
+        if (horizontal) {
+            int maxStartX = WIDTH / UNIT_SIZE - 6;
+            int startX = random.nextInt(maxStartX) * UNIT_SIZE;
+            int y = random.nextInt(HEIGHT / UNIT_SIZE) * UNIT_SIZE;
+            spawnHorizontalWall(startX, y, spawnTime);
+        } else {
+            int x = random.nextInt(WIDTH / UNIT_SIZE) * UNIT_SIZE;
+            int maxStartY = HEIGHT / UNIT_SIZE - 6;
+            int startY = random.nextInt(maxStartY) * UNIT_SIZE;
+            spawnVerticalWall(x, startY, spawnTime);
+        }
+        
+        if (redWalls.isEmpty() || redWalls.get(redWalls.size() - 1).spawnTime != spawnTime) {
+            spawn6CellWall(spawnTime);
+        }
+    }
+    
+    private void spawnTwoWalls(long spawnTime) {
+        boolean firstHorizontal = random.nextBoolean();
+        
+        if (firstHorizontal) {
+            int maxStartX = WIDTH / UNIT_SIZE - 6;
+            int startX = random.nextInt(maxStartX) * UNIT_SIZE;
+            int y = random.nextInt(HEIGHT / UNIT_SIZE) * UNIT_SIZE;
+            spawnHorizontalWall(startX, y, spawnTime);
+        } else {
+            int x = random.nextInt(WIDTH / UNIT_SIZE) * UNIT_SIZE;
+            int maxStartY = HEIGHT / UNIT_SIZE - 6;
+            int startY = random.nextInt(maxStartY) * UNIT_SIZE;
+            spawnVerticalWall(x, startY, spawnTime);
+        }
+        
+        if (redWalls.isEmpty() || redWalls.get(redWalls.size() - 1).spawnTime != spawnTime) {
+            spawnTwoWalls(spawnTime);
+            return;
+        }
+        
+        boolean secondHorizontal = !firstHorizontal;
+        
+        if (secondHorizontal) {
+            int maxStartX = WIDTH / UNIT_SIZE - 6;
+            int startX = random.nextInt(maxStartX) * UNIT_SIZE;
+            int y = random.nextInt(HEIGHT / UNIT_SIZE) * UNIT_SIZE;
+            spawnHorizontalWall(startX, y, spawnTime);
+        } else {
+            int x = random.nextInt(WIDTH / UNIT_SIZE) * UNIT_SIZE;
+            int maxStartY = HEIGHT / UNIT_SIZE - 6;
+            int startY = random.nextInt(maxStartY) * UNIT_SIZE;
+            spawnVerticalWall(x, startY, spawnTime);
+        }
+        
+        if (redWalls.size() < 12) {
+            spawnTwoWalls(spawnTime);
+        }
+    }
+    
+    private void spawnThreeBlockWalls(long spawnTime) {
+        for (int block = 0; block < 3; block++) {
+            int startX = random.nextInt(WIDTH / UNIT_SIZE - 2) * UNIT_SIZE;
+            int startY = random.nextInt(HEIGHT / UNIT_SIZE - 2) * UNIT_SIZE;
+            
+            boolean valid = true;
+            for (int i = 0; i < 3 && valid; i++) {
+                for (int j = 0; j < 3 && valid; j++) {
+                    Point pos = new Point(startX + i * UNIT_SIZE, startY + j * UNIT_SIZE);
+                    if (!isValidWallPosition(pos)) {
+                        valid = false;
+                    }
+                }
+            }
+            
+            if (valid) {
+                for (int i = 0; i < 3; i++) {
+                    for (int j = 0; j < 3; j++) {
+                        Point pos = new Point(startX + i * UNIT_SIZE, startY + j * UNIT_SIZE);
+                        redWalls.add(new RedWall(pos, spawnTime));
+                    }
+                }
+            } else {
+                block--;
+            }
+        }
+    }
+    
+    private void updateRedWalls() {
+        long currentTime = System.currentTimeMillis();
+        
+        for (int i = redWalls.size() - 1; i >= 0; i--) {
+            RedWall wall = redWalls.get(i);
+            if (currentTime - wall.spawnTime >= RED_WALL_LIFETIME) {
+                redWalls.remove(i);
+            }
+        }
+    }
+    
+    private void checkNegativeBuff(int currentScore) {
+        if (!negativeBuffTriggered && currentScore >= NEGATIVE_BUFF_SCORE) {
+            negativeBuffTriggered = true;
+            negativeBuffActive = true;
+            negativeBuffEndTime = System.currentTimeMillis() + NEGATIVE_BUFF_DURATION;
+            negativeBuffStartTime = System.currentTimeMillis();
+            lastRedWallSpawnTime = System.currentTimeMillis();
+        }
+        
+        if (negativeBuffActive && System.currentTimeMillis() >= negativeBuffEndTime) {
+            negativeBuffActive = false;
+            redWalls.clear();
+        }
+    }
+    
+    private void addToInventory(String item) {
+        for (int i = 0; i < inventory.length; i++) {
+            if (inventory[i] == null) {
+                inventory[i] = item;
+                break;
+            }
+        }
+    }
+    
+    private void useItem() {
+        if (selectedItem >= 0 && selectedItem < inventory.length && inventory[selectedItem] != null) {
+            String item = inventory[selectedItem];
+            if ("clear".equals(item)) {
+                pillars.clear();
+                redWalls.clear();
+                inventory[selectedItem] = null;
+            } else if ("respawn".equals(item)) {
+                respawnSnake();
+                inventory[selectedItem] = null;
+            }
+            selectedItem = -1;
+        }
+    }
+    
+    private void spawnWallsByPhase(long currentTime) {
+        if (!negativeBuffActive) return;
+        
+        long elapsed = currentTime - negativeBuffStartTime;
+        
+        if (currentTime - lastRedWallSpawnTime < RED_WALL_SPAWN_INTERVAL) return;
+        
+        if (elapsed < RED_WALL_SECTION_DURATION) {
+            redWalls.clear();
+            spawn6CellWall(currentTime);
+            lastRedWallSpawnTime = currentTime;
+        } else if (elapsed < RED_WALL_SECTION_DURATION * 2) {
+            redWalls.clear();
+            spawnTwoWalls(currentTime);
+            lastRedWallSpawnTime = currentTime;
+        } else {
+            redWalls.clear();
+            spawnThreeBlockWalls(currentTime);
+            lastRedWallSpawnTime = currentTime;
+        }
+    }
+    
+    private void updateSpeed() {
+        int targetDelay;
+        
+        if (isFast) {
+            targetDelay = FAST_DELAY;
+        } else if (isSlow) {
+            targetDelay = SLOW_DELAY;
+        } else if (isInvincible) {
+            targetDelay = INVINCIBLE_DELAY;
+        } else {
+            targetDelay = baseDelay;
+        }
+        
+        if (targetDelay != currentDelay) {
+            currentDelay = targetDelay;
+            timer.setDelay(currentDelay);
         }
     }
 
@@ -308,9 +900,20 @@ public class GamePanel extends JPanel implements ActionListener {
             spawnGoldenFood();
             lastGoldenFoodTime = currentTime;
         }
+        
+        if (currentTime - lastPurpleFoodTime >= PURPLE_FOOD_INTERVAL) {
+            spawnPurpleFood();
+            lastPurpleFoodTime = currentTime;
+        }
+        
+        if (currentTime - lastCyanFoodTime >= CYAN_FOOD_INTERVAL) {
+            spawnCyanFood();
+            lastCyanFoodTime = currentTime;
+        }
 
         if (isInvincible && currentTime >= invincibleEndTime) {
             isInvincible = false;
+            updateSpeed();
         }
 
         Point head = snake.get(0);
@@ -351,6 +954,10 @@ public class GamePanel extends JPanel implements ActionListener {
                 comboCount = 1;
             }
             lastComboTime = currentTime;
+            isFoodCombo = true;
+            
+            int foodBonus = comboCount * 20;
+            score += foodBonus;
             
             if (pillars.size() < MAX_PILLARS) {
                 float spawnProbability = Math.max(0.3f, 1.0f - (float)pillars.size() / MAX_PILLARS);
@@ -365,19 +972,41 @@ public class GamePanel extends JPanel implements ActionListener {
             if (newDelay < FAST_DELAY) {
                 newDelay = FAST_DELAY;
             }
-            if (newDelay != currentDelay && !isFast && !isSlow) {
-                currentDelay = newDelay;
-                timer.setDelay(currentDelay);
+            if (newDelay != baseDelay) {
+                baseDelay = newDelay;
+                if (!isFast && !isSlow && !isInvincible) {
+                    currentDelay = baseDelay;
+                    timer.setDelay(currentDelay);
+                }
             }
             
             newFood();
-        } else if (goldenFoodActive && newHead.equals(goldenFood)) {
-            isInvincible = true;
-            invincibleEndTime = currentTime + INVINCIBLE_TIME;
-            goldenFoodActive = false;
-            goldenFood = null;
         } else {
-            snake.remove(snake.size() - 1);
+            boolean ateGolden = false;
+            for (int i = 0; i < goldenFoods.size(); i++) {
+                Point goldenFood = goldenFoods.get(i);
+                if (newHead.equals(goldenFood)) {
+                    isInvincible = true;
+                    invincibleEndTime = currentTime + INVINCIBLE_TIME;
+                    goldenFoods.remove(i);
+                    updateSpeed();
+                    ateGolden = true;
+                    break;
+                }
+            }
+            if (ateGolden) {
+                snake.remove(snake.size() - 1);
+            } else if (purpleFoodActive && newHead.equals(purpleFood)) {
+                addToInventory("clear");
+                purpleFoodActive = false;
+                purpleFood = null;
+            } else if (cyanFoodActive && newHead.equals(cyanFood)) {
+                hasRespawnMarker = true;
+                cyanFoodActive = false;
+                cyanFood = null;
+            } else {
+                snake.remove(snake.size() - 1);
+            }
         }
     }
 
@@ -393,6 +1022,33 @@ public class GamePanel extends JPanel implements ActionListener {
                     pillarFlash = true;
                     pillars.remove(i);
                     pillarDestroyCount++;
+                    
+                    long currentTime = System.currentTimeMillis();
+                    if (currentTime - lastComboTime < COMBO_TIMEOUT) {
+                        comboCount++;
+                    } else {
+                        comboCount = 1;
+                    }
+                    lastComboTime = currentTime;
+                    isFoodCombo = false;
+                    
+                    int pillarBonus = comboCount * 100;
+                    score += pillarBonus;
+                } else {
+                    running = false;
+                }
+                break;
+            }
+        }
+
+        for (int i = 0; i < redWalls.size(); i++) {
+            RedWall wall = redWalls.get(i);
+            if (head.equals(wall.position)) {
+                if (isInvincible) {
+                    redWalls.clear();
+                    isInvincible = false;
+                    invincibleEndTime = 0;
+                    updateSpeed();
                 } else {
                     running = false;
                 }
@@ -402,7 +1058,7 @@ public class GamePanel extends JPanel implements ActionListener {
 
         if (!running) {
             timer.stop();
-            long elapsedTime = (System.currentTimeMillis() - startTime) / 1000;
+            long elapsedTime = (System.currentTimeMillis() - startTime - accumulatedPauseTime) / 1000;
             int baseScore = foodCount * 100 + pillarDestroyCount * PILLAR_DESTROY_SCORE;
             int timePenalty = 0;
             if (elapsedTime * 1000 > SAFE_TIME) {
@@ -437,7 +1093,7 @@ public class GamePanel extends JPanel implements ActionListener {
         FontMetrics metrics3 = getFontMetrics(g.getFont());
         g.drawString("摧毁障碍物: " + pillarDestroyCount, (WIDTH - metrics3.stringWidth("摧毁障碍物: " + pillarDestroyCount)) / 2, HEIGHT / 2 - 10);
         
-        long elapsedTime = (System.currentTimeMillis() - startTime) / 1000;
+        long elapsedTime = (System.currentTimeMillis() - startTime - accumulatedPauseTime) / 1000;
         g.drawString("游戏时长: " + elapsedTime + "秒", (WIDTH - metrics3.stringWidth("游戏时长: " + elapsedTime + "秒")) / 2, HEIGHT / 2 + 30);
         
         if (score >= highScore) {
@@ -477,6 +1133,21 @@ public class GamePanel extends JPanel implements ActionListener {
 
     public void actionPerformed(ActionEvent e) {
         if (running && !paused) {
+            long elapsedTime = (System.currentTimeMillis() - startTime - accumulatedPauseTime) / 1000;
+            int timePenalty = 0;
+            if (elapsedTime * 1000 > SAFE_TIME) {
+                timePenalty = (int)(elapsedTime - SAFE_TIME / 1000) * 5;
+            }
+            int currentScore = score - timePenalty;
+            if (currentScore < 0) currentScore = 0;
+            
+            checkNegativeBuff(currentScore);
+            
+            if (negativeBuffActive) {
+                updateRedWalls();
+                spawnWallsByPhase(System.currentTimeMillis());
+            }
+            
             move();
             checkCollisions();
         }
@@ -509,6 +1180,37 @@ public class GamePanel extends JPanel implements ActionListener {
                 }
                 return;
             }
+            
+            if (key == KeyEvent.VK_F5) {
+                if (hasRespawnMarker) {
+                    respawnSnake();
+                    hasRespawnMarker = false;
+                }
+                return;
+            }
+            
+            if (key == KeyEvent.VK_F6) {
+                pillars.clear();
+                redWalls.clear();
+                return;
+            }
+            
+            if (key == KeyEvent.VK_1) {
+                selectedItem = 0;
+                return;
+            }
+            if (key == KeyEvent.VK_2) {
+                selectedItem = 1;
+                return;
+            }
+            if (key == KeyEvent.VK_3) {
+                selectedItem = 2;
+                return;
+            }
+            if (key == KeyEvent.VK_E) {
+                useItem();
+                return;
+            }
 
             if (paused) return;
 
@@ -538,11 +1240,11 @@ public class GamePanel extends JPanel implements ActionListener {
             } else if (key == KeyEvent.VK_SHIFT) {
                 isSlow = true;
                 isFast = false;
-                timer.setDelay(SLOW_DELAY);
+                updateSpeed();
             } else if (key == KeyEvent.VK_SPACE) {
                 isFast = true;
                 isSlow = false;
-                timer.setDelay(FAST_DELAY);
+                updateSpeed();
             }
         }
 
@@ -553,11 +1255,21 @@ public class GamePanel extends JPanel implements ActionListener {
 
             if (key == KeyEvent.VK_SHIFT) {
                 isSlow = false;
-                timer.setDelay(isFast ? FAST_DELAY : currentDelay);
+                updateSpeed();
             } else if (key == KeyEvent.VK_SPACE) {
                 isFast = false;
-                timer.setDelay(isSlow ? SLOW_DELAY : currentDelay);
+                updateSpeed();
             }
+        }
+    }
+    
+    class RedWall {
+        Point position;
+        long spawnTime;
+        
+        RedWall(Point position, long spawnTime) {
+            this.position = position;
+            this.spawnTime = spawnTime;
         }
     }
 }
