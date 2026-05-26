@@ -39,6 +39,10 @@ public class GamePanel extends JPanel implements ActionListener {
     private static final long SPEED_BUFF_DURATION = 10000;
     private static final int RED_WALL_SPAWN_INTERVAL = 5000;
     private static final long RED_WALL_LIFETIME = 5000;
+    private static final long METEOR_EVENT_START_TIME = 180000;
+    private static final long METEOR_EVENT_DURATION = 30000;
+    private static final int METEOR_COUNT = 10;
+    private static final int METEOR_CHANGE_INTERVAL = 5000;
 
     private ArrayList<Point> snake;
     private Point food;
@@ -47,6 +51,10 @@ public class GamePanel extends JPanel implements ActionListener {
     private Point cyanFood;
     private ArrayList<Point> pillars;
     private ArrayList<RedWall> redWalls;
+    private ArrayList<Point> meteors;
+    private boolean meteorEventActive = false;
+    private long meteorEventEndTime = 0;
+    private long lastMeteorChangeTime = 0;
     private char direction = 'R';
     private boolean running = false;
     private boolean paused = false;
@@ -190,6 +198,10 @@ public class GamePanel extends JPanel implements ActionListener {
         negativeBuffEndTime = 0;
         negativeBuffStartTime = 0;
         lastRedWallSpawnTime = 0;
+        meteors = new ArrayList<>();
+        meteorEventActive = false;
+        meteorEventEndTime = 0;
+        lastMeteorChangeTime = 0;
         accumulatedPauseTime = 0;
         timer = new Timer(currentDelay, this);
         timer.start();
@@ -353,6 +365,13 @@ public class GamePanel extends JPanel implements ActionListener {
                 g.fillRect(wall.position.x, wall.position.y, UNIT_SIZE, UNIT_SIZE);
                 g.setColor(Color.RED);
                 g.drawRect(wall.position.x, wall.position.y, UNIT_SIZE, UNIT_SIZE);
+            }
+            
+            for (Point meteor : meteors) {
+                g.setColor(Color.BLACK);
+                g.fillRect(meteor.x, meteor.y, UNIT_SIZE, UNIT_SIZE);
+                g.setColor(Color.GRAY);
+                g.drawRect(meteor.x, meteor.y, UNIT_SIZE, UNIT_SIZE);
             }
             
             if (pillarFlash) {
@@ -549,6 +568,13 @@ public class GamePanel extends JPanel implements ActionListener {
             g.setColor(Color.RED);
             g.setFont(new Font("微软雅黑", Font.BOLD, 18));
             g.drawString("⚠️ 危险! " + remainingTime + "s", WIDTH - 180, 105);
+        }
+        
+        if (meteorEventActive) {
+            long remainingTime = (meteorEventEndTime - System.currentTimeMillis()) / 1000;
+            g.setColor(Color.BLACK);
+            g.setFont(new Font("微软雅黑", Font.BOLD, 18));
+            g.drawString("☄️ 陨石! " + remainingTime + "s", WIDTH - 180, 130);
         }
 
         g.drawString("摧毁: " + pillarDestroyCount, WIDTH - 140, 55);
@@ -948,6 +974,104 @@ public class GamePanel extends JPanel implements ActionListener {
         }
     }
     
+    private void checkMeteorEvent() {
+        long elapsedTime = System.currentTimeMillis() - startTime - accumulatedPauseTime;
+        
+        if (!meteorEventActive && elapsedTime >= METEOR_EVENT_START_TIME) {
+            meteorEventActive = true;
+            meteorEventEndTime = System.currentTimeMillis() + METEOR_EVENT_DURATION;
+            lastMeteorChangeTime = System.currentTimeMillis();
+            spawnMeteors();
+        }
+        
+        if (meteorEventActive && System.currentTimeMillis() >= meteorEventEndTime) {
+            meteorEventActive = false;
+            meteors.clear();
+        }
+        
+        if (meteorEventActive && System.currentTimeMillis() - lastMeteorChangeTime >= METEOR_CHANGE_INTERVAL) {
+            spawnMeteors();
+            lastMeteorChangeTime = System.currentTimeMillis();
+        }
+    }
+    
+    private void spawnMeteors() {
+        meteors.clear();
+        
+        for (int i = 0; i < METEOR_COUNT; i++) {
+            Point meteor = generateSingleMeteor();
+            if (meteor != null) {
+                meteors.add(meteor);
+            }
+        }
+    }
+    
+    private Point generateSingleMeteor() {
+        int maxAttempts = 100;
+        
+        for (int attempt = 0; attempt < maxAttempts; attempt++) {
+            int x = random.nextInt(WIDTH / UNIT_SIZE) * UNIT_SIZE;
+            int y = random.nextInt(HEIGHT / UNIT_SIZE) * UNIT_SIZE;
+            Point candidate = new Point(x, y);
+            
+            boolean valid = true;
+            
+            for (Point p : snake) {
+                if (candidate.equals(p)) {
+                    valid = false;
+                    break;
+                }
+            }
+            
+            if (!valid) continue;
+            
+            if (candidate.equals(food)) {
+                valid = false;
+                continue;
+            }
+            
+            for (Point gf : goldenFoods) {
+                if (candidate.equals(gf)) {
+                    valid = false;
+                    break;
+                }
+            }
+            
+            if (!valid) continue;
+            
+            for (Point p : pillars) {
+                if (candidate.equals(p)) {
+                    valid = false;
+                    break;
+                }
+            }
+            
+            if (!valid) continue;
+            
+            for (RedWall rw : redWalls) {
+                if (candidate.equals(rw.position)) {
+                    valid = false;
+                    break;
+                }
+            }
+            
+            if (!valid) continue;
+            
+            for (Point m : meteors) {
+                if (candidate.equals(m)) {
+                    valid = false;
+                    break;
+                }
+            }
+            
+            if (valid) {
+                return candidate;
+            }
+        }
+        
+        return null;
+    }
+    
     private void addToInventory(String item) {
         for (int i = 0; i < inventory.length; i++) {
             if (inventory[i] == null) {
@@ -1219,6 +1343,17 @@ public class GamePanel extends JPanel implements ActionListener {
             }
         }
 
+        for (int i = 0; i < meteors.size(); i++) {
+            if (head.equals(meteors.get(i))) {
+                if (hasRespawnMarker) {
+                    respawnAtOpenArea();
+                } else {
+                    running = false;
+                }
+                break;
+            }
+        }
+
         if (!running) {
             timer.stop();
             long elapsedTime = (System.currentTimeMillis() - startTime - accumulatedPauseTime) / 1000;
@@ -1306,6 +1441,7 @@ public class GamePanel extends JPanel implements ActionListener {
             
             checkNegativeBuff(currentScore);
             checkSpeedBuff();
+            checkMeteorEvent();
             
             if (negativeBuffActive) {
                 updateRedWalls();
