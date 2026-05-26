@@ -65,13 +65,38 @@
 
 ### 🚀 启动方式
 
+#### 方式一：直接运行JAR（推荐分发）
+```bash
+cd sneck
+java -jar SnakeGame.jar
+```
+
+#### 方式二：运行启动脚本
+直接双击 `start.bat` 文件即可启动
+
+#### 方式三：手动编译运行
 ```bash
 cd sneck
 javac -encoding UTF-8 -d bin src/*.java
 java -cp bin snakegame.SnakeGame
 ```
 
-或者直接运行 `start.bat` 文件。
+### 📦 分发说明
+
+如果要将游戏分享给朋友：
+
+1. **打包文件位置**：`SnakeGame_Package.zip`（约55KB）
+2. **包含内容**：
+   - `SnakeGame.jar` - 可执行JAR文件
+   - `start.bat` - 启动脚本
+   - `bin/` - 编译好的类文件
+   - `highscore.dat` - 最高分文件
+
+3. **分发步骤**：
+   - 解压 `SnakeGame_Package.zip`
+   - 双击 `start.bat` 启动游戏
+
+**注意**：朋友电脑需要安装JDK才能运行
 
 ### 📁 项目结构
 
@@ -84,6 +109,7 @@ sneck/
 │   └── StartPanel.java   # 开始界面
 ├── bin/              # 编译后的类文件
 ├── skins/            # 皮肤目录（可选）
+├── SnakeGame.jar     # 可执行JAR文件
 ├── highscore.dat     # 最高分存储文件
 └── start.bat         # Windows启动脚本
 ```
