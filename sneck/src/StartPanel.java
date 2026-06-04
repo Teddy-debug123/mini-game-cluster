@@ -105,7 +105,7 @@ public class StartPanel extends JPanel {
         
         add(startButton);
         
-        JLabel copyright = new JLabel("2024 Snake Game");
+        JLabel copyright = new JLabel("2026 Snake Game");
         copyright.setFont(new Font("微软雅黑", Font.PLAIN, 14));
         copyright.setForeground(Color.DARK_GRAY);
         copyright.setBounds((WIDTH - 150) / 2, 670, 150, 30);
